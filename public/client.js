@@ -3,15 +3,19 @@ const socket = io();
 
 // 游戏配置
 const GRID_SIZE = 5;
-const CELL_PADDING = 0.1; // 格子内边距比例
+const CELL_PADDING = 0.15; // 增加格子内边距，让棋子更小巧
 let board = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null));
 let hoveredCell = null;
 let isFlipping = false; // 硬币是否正在翻转
 let playerCount = 0; // 当前在线玩家数量
+let isMyTurn = false; // 是否是当前玩家的回合
 
 // 处理棋盘更新
-socket.on('boardUpdate', (newBoard) => {
+// 处理回合状态更新
+socket.on('turnUpdate', ({ board: newBoard, currentTurn }) => {
     board = JSON.parse(JSON.stringify(newBoard));
+    isMyTurn = (currentTurn === socket.id);
+    updateTurnButton();
     drawBoard();
 });
 
@@ -19,16 +23,68 @@ socket.on('boardUpdate', (newBoard) => {
 socket.on('playerCount', (count) => {
     playerCount = count;
     updatePlayerCount();
+    updateTurnButton(); // 更新回合按钮状态
+    
+    // 如果刚好达到两个玩家，通知服务器重新初始化回合
+    if (count === 2) {
+        socket.emit('checkTurn');
+    }
 });
+
+// 处理游戏重置
+socket.on('gameReset', () => {
+    board = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null));
+    drawBoard();
+});
+
+// 处理初始化玩家
+socket.on('initPlayer', ({ isFirstPlayer }) => {
+    isMyTurn = isFirstPlayer;
+    updateTurnButton();
+});
+
+// 更新回合按钮状态
+function updateTurnButton() {
+    const endTurnBtn = document.getElementById('endTurnBtn');
+    if (endTurnBtn) {
+        if (playerCount < 2) {
+            endTurnBtn.textContent = '等待其他玩家...';
+            endTurnBtn.disabled = true;
+            endTurnBtn.classList.add('disabled');
+        } else if (isMyTurn) {
+            endTurnBtn.textContent = '回合结束';
+            endTurnBtn.disabled = false;
+            endTurnBtn.classList.remove('disabled');
+        } else {
+            endTurnBtn.textContent = '对方回合';
+            endTurnBtn.disabled = true;
+            endTurnBtn.classList.add('disabled');
+        }
+    }
+}
 
 // 等待 DOM 加载完成后初始化
 document.addEventListener('DOMContentLoaded', () => {
+    // 回合结束按钮
     const endTurnBtn = document.getElementById('endTurnBtn');
     if (endTurnBtn) {
         endTurnBtn.addEventListener('click', () => {
-            console.log('发送当前棋盘状态');
-            // 发送当前棋盘状态给服务器
-            socket.emit('syncBoard', board);
+            if (isMyTurn && playerCount >= 2) {
+                console.log('发送回合结束');
+                socket.emit('endTurn', board);
+                isMyTurn = false;
+                updateTurnButton();
+            }
+        });
+    }
+
+    // 结束游戏按钮
+    const resetGameBtn = document.getElementById('resetGameBtn');
+    if (resetGameBtn) {
+        resetGameBtn.addEventListener('click', () => {
+            if (confirm('确定要结束当前游戏吗？')) {
+                socket.emit('resetGame');
+            }
         });
     }
 });
@@ -207,14 +263,18 @@ function drawBoard() {
             const x = col * cellSize;
             const y = row * cellSize;
 
+            // 绘制格子背景
+            ctx.fillStyle = (row + col) % 2 === 0 ? '#f8fafc' : '#f1f5f9';
+            ctx.fillRect(x, y, cellSize, cellSize);
+
             // 绘制格子边框
-            ctx.strokeStyle = 'rgba(124, 58, 237, 0.3)';
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = 'rgba(124, 58, 237, 0.2)';
+            ctx.lineWidth = 1;
             ctx.strokeRect(x, y, cellSize, cellSize);
 
-            // 如果是悬停的格子，绘制高亮效果
-            if (hoveredCell && hoveredCell.row === row && hoveredCell.col === col) {
-                ctx.fillStyle = 'rgba(124, 58, 237, 0.1)';
+            // 如果是悬停的格子且是自己的回合，绘制高亮效果
+            if (isMyTurn && hoveredCell && hoveredCell.row === row && hoveredCell.col === col) {
+                ctx.fillStyle = 'rgba(124, 58, 237, 0.15)';
                 ctx.fillRect(x, y, cellSize, cellSize);
             }
 
@@ -229,11 +289,11 @@ function drawBoard() {
                 ctx.arc(
                     x + cellSize/2 + 2,
                     y + cellSize/2 + 2,
-                    pieceSize/2,
+                    (pieceSize/2) * 0.9, // 稍微缩小棋子尺寸
                     0,
                     Math.PI * 2
                 );
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
                 ctx.fill();
 
                 // 绘制棋子本体
@@ -241,20 +301,13 @@ function drawBoard() {
                 ctx.arc(
                     x + cellSize/2,
                     y + cellSize/2,
-                    pieceSize/2,
+                    (pieceSize/2) * 0.9, // 稍微缩小棋子尺寸
                     0,
                     Math.PI * 2
                 );
-                ctx.fillStyle = COLORS[piece.color];
-                ctx.fill();
-                
-                // 绘制棋子边框和光晕效果
-                ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
-                ctx.lineWidth = 2;
-                ctx.stroke();
-                
-                // 添加内部渐变效果
-                const gradient = ctx.createRadialGradient(
+
+                // 创建径向渐变作为棋子的基色
+                const baseGradient = ctx.createRadialGradient(
                     x + cellSize/2 - pieceSize/4,
                     y + cellSize/2 - pieceSize/4,
                     0,
@@ -262,9 +315,30 @@ function drawBoard() {
                     y + cellSize/2,
                     pieceSize/2
                 );
-                gradient.addColorStop(0, 'rgba(255, 255, 255, 0.4)');
-                gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-                ctx.fillStyle = gradient;
+                const color = COLORS[piece.color];
+                baseGradient.addColorStop(0, color);
+                baseGradient.addColorStop(1, adjustColor(color, -20)); // 略微暗化边缘
+                ctx.fillStyle = baseGradient;
+                ctx.fill();
+                
+                // 绘制棋子边框
+                ctx.strokeStyle = adjustColor(color, -40); // 更暗的边框
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+                
+                // 添加高光效果
+                const highlightGradient = ctx.createRadialGradient(
+                    x + cellSize/2 - pieceSize/3,
+                    y + cellSize/2 - pieceSize/3,
+                    0,
+                    x + cellSize/2,
+                    y + cellSize/2,
+                    pieceSize/2
+                );
+                highlightGradient.addColorStop(0, 'rgba(255, 255, 255, 0.6)');
+                highlightGradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.1)');
+                highlightGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+                ctx.fillStyle = highlightGradient;
                 ctx.fill();
             }
         }
@@ -324,6 +398,8 @@ canvas.addEventListener('mousemove', (event) => {
 });
 
 canvas.addEventListener('click', (event) => {
+    if (!isMyTurn) return; // 非自己回合不能操作
+
     const pos = getBoardPosition(event);
     if (pos.row >= 0 && pos.row < GRID_SIZE && pos.col >= 0 && pos.col < GRID_SIZE) {
         selectedCell = pos;
@@ -334,11 +410,22 @@ canvas.addEventListener('click', (event) => {
 // 添加硬币点击事件
 document.querySelector('.coin').addEventListener('click', flipCoin);
 
+// 调整颜色明暗度的辅助函数
+function adjustColor(color, amount) {
+    const hex = color.replace('#', '');
+    const num = parseInt(hex, 16);
+    const r = Math.min(255, Math.max(0, (num >> 16) + amount));
+    const g = Math.min(255, Math.max(0, ((num >> 8) & 0x00FF) + amount));
+    const b = Math.min(255, Math.max(0, (num & 0x0000FF) + amount));
+    return `#${(r << 16 | g << 8 | b).toString(16).padStart(6, '0')}`;
+}
+
 // 初始化游戏
 function initGame() {
     resizeCanvas();
     initPieceSelector();
     window.addEventListener('resize', resizeCanvas);
+    updateTurnButton();
 }
 
 // 启动游戏
