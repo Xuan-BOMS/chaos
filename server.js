@@ -3,21 +3,29 @@ const app = express();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http);
 
-// 提供静态文件服务
 app.use(express.static('public'));
 
-// 处理 socket.io 连接
-io.on('connection', (socket) => {
-    console.log('用户已连接');
+let playerCount = 0;
 
-    socket.on('disconnect', () => {
-        console.log('用户已断开连接');
+io.on('connection', (socket) => {
+    playerCount++;
+    io.emit('playerCount', playerCount);
+
+    // 新玩家连接时发送空棋盘
+    socket.emit('boardUpdate', Array(5).fill(null).map(() => Array(5).fill(null)));
+
+    socket.on('syncBoard', (board) => {
+        // 广播给所有玩家（包括自己）
+        io.emit('boardUpdate', board);
     });
 
-    // 这里添加游戏相关的 socket 事件处理
+    socket.on('disconnect', () => {
+        playerCount--;
+        io.emit('playerCount', playerCount);
+    });
 });
 
-const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => {
-    console.log(`服务器运行在 http://localhost:${PORT}`);
+http.listen(3000, () => {
+    console.log('服务器已启动，端口 3000');
 });
+
