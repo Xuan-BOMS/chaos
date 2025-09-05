@@ -5,43 +5,119 @@ const io = require('socket.io')(http);
 
 app.use(express.static('public'));
 
-let playerCount = 0;
-let players = [];
-let currentTurn = null;
-let gameBoard = Array(5).fill(null).map(() => Array(5).fill(null));
+// 游戏房间系统
+const rooms = new Map(); // 储存所有房间信息
+const matchingPlayers = new Set(); // 等待随机匹配的玩家
+
+// 获取玩家所在的房间ID
+function getPlayerRoom(socket) {
+    const roomIds = Array.from(socket.rooms);
+    return roomIds.find(id => id !== socket.id); // 排除socket自身的room
+}
+
+// 获取房间信息
+function getRoomInfo(roomId) {
+    return rooms.get(roomId);
+}
 
 io.on('connection', (socket) => {
-    playerCount++;
-    players.push(socket.id);
-    io.emit('playerCount', playerCount);
+    console.log('新玩家连接:', socket.id);
 
-    // 决定是否是第一个玩家
-    const isFirstPlayer = players.length === 1;
-    if (isFirstPlayer && players.length < 2) {
-        currentTurn = null; // 重置当前回合，等待第二个玩家
-    } else if (players.length === 2 && !currentTurn) {
-        currentTurn = players[0]; // 当第二个玩家加入时，设置第一个玩家为当前回合
-    }
-    
-    // 发送初始状态
-    socket.emit('initPlayer', { isFirstPlayer });
-    io.emit('turnUpdate', { // 使用 io.emit 而不是 socket.emit，确保所有玩家状态同步
-        board: gameBoard,
-        currentTurn: currentTurn
+    // 处理随机匹配
+    socket.on('randomMatch', () => {
+        matchingPlayers.add(socket.id);
+        socket.emit('matchingStatus', '等待匹配中...');
+        
+        if (matchingPlayers.size >= 2) {
+            // 取出两个玩家进行匹配
+            const players = Array.from(matchingPlayers).slice(0, 2);
+            const roomId = `random_${Date.now()}`;
+            
+            // 创建新房间
+            rooms.set(roomId, {
+                players: players,
+                currentTurn: players[0],
+                board: Array(5).fill(null).map(() => Array(5).fill(null))
+            });
+            
+            // 将两个玩家加入房间
+            players.forEach((playerId, index) => {
+                const playerSocket = io.sockets.sockets.get(playerId);
+                if (playerSocket) {
+                    playerSocket.join(roomId);
+                    playerSocket.emit('matchSuccess', { roomId, isFirstPlayer: index === 0 });
+                    matchingPlayers.delete(playerId);
+                }
+            });
+        }
+    });
+
+    // 处理创建房间
+    socket.on('createRoom', (roomId) => {
+        if (rooms.has(roomId)) {
+            socket.emit('roomError', '房间已存在，请换一个房间号');
+            return;
+        }
+        
+        rooms.set(roomId, {
+            players: [socket.id],
+            currentTurn: null,
+            board: Array(5).fill(null).map(() => Array(5).fill(null))
+        });
+        
+        socket.join(roomId);
+        socket.emit('roomCreated', roomId);
+        socket.emit('matchingStatus', '等待其他玩家加入...');
+    });
+
+    // 处理加入房间
+    socket.on('joinRoom', (roomId) => {
+        const room = rooms.get(roomId);
+        if (!room) {
+            socket.emit('roomError', '房间不存在');
+            return;
+        }
+        
+        if (room.players.length >= 2) {
+            socket.emit('roomError', '房间已满');
+            return;
+        }
+        
+        room.players.push(socket.id);
+        room.currentTurn = room.players[0];
+        socket.join(roomId);
+        
+        // 通知房间内所有玩家游戏开始
+        io.to(roomId).emit('gameStart', {
+            board: room.board,
+            currentTurn: room.currentTurn,
+            playerCount: room.players.length // 添加玩家数量信息
+        });
+        
+        // 分别通知两个玩家他们的角色
+        io.to(room.players[0]).emit('initPlayer', { isFirstPlayer: true });
+        io.to(room.players[1]).emit('initPlayer', { isFirstPlayer: false });
     });
 
     socket.on('endTurn', (board) => {
-        if (socket.id === currentTurn) {
-            gameBoard = board;
+        const roomId = getPlayerRoom(socket);
+        if (!roomId) return;
+        
+        const room = getRoomInfo(roomId);
+        if (!room) return;
+        
+        if (socket.id === room.currentTurn) {
+            room.gameBoard = board;
             // 找到下一个玩家
-            const currentIndex = players.indexOf(socket.id);
-            const nextIndex = (currentIndex + 1) % players.length;
-            currentTurn = players[nextIndex];
+            const currentIndex = room.players.indexOf(socket.id);
+            const nextIndex = (currentIndex + 1) % room.players.length;
+            room.currentTurn = room.players[nextIndex];
             
-            // 广播新状态给所有玩家
-            io.emit('turnUpdate', {
-                board: gameBoard,
-                currentTurn: currentTurn
+            // 广播更新后的游戏状态给房间内所有玩家
+            io.to(roomId).emit('updateGame', {
+                board: room.gameBoard,
+                currentTurn: room.currentTurn,
+                playerCount: room.players.length
             });
         }
     });
@@ -59,27 +135,95 @@ io.on('connection', (socket) => {
 
     // 处理游戏重置
     socket.on('resetGame', () => {
-        gameBoard = Array(5).fill(null).map(() => Array(5).fill(null));
-        currentTurn = players[0];  // 重置为第一个玩家的回合
-        io.emit('gameReset');
-        io.emit('turnUpdate', {
-            board: gameBoard,
-            currentTurn: currentTurn
+        const roomId = getPlayerRoom(socket);
+        if (!roomId) return;
+        
+        const room = getRoomInfo(roomId);
+        if (!room) return;
+
+        room.board = Array(5).fill(null).map(() => Array(5).fill(null));
+        room.currentTurn = room.players[0];  // 重置为第一个玩家的回合
+        
+        io.to(roomId).emit('gameReset');
+        io.to(roomId).emit('updateGame', {
+            board: room.board,
+            currentTurn: room.currentTurn,
+            playerCount: room.players.length
         });
     });
 
-    socket.on('disconnect', () => {
-        playerCount--;
-        players = players.filter(id => id !== socket.id);
-        if (currentTurn === socket.id && players.length > 0) {
-            currentTurn = players[0];
+    // 处理落子
+    socket.on('placePiece', ({ row, col, color }) => {
+        const roomId = getPlayerRoom(socket);
+        if (!roomId) return;
+        
+        const room = getRoomInfo(roomId);
+        if (!room || socket.id !== room.currentTurn) return;
+        
+        // 更新棋盘状态（允许更改或删除已有棋子）
+        room.board[row][col] = color;
+            
+        // 广播更新后的游戏状态
+        io.to(roomId).emit('updateGame', {
+            board: room.board,
+            currentTurn: room.currentTurn,
+            playerCount: room.players.length
+        });
+    });
+
+    // 处理玩家离开房间
+    socket.on('leaveRoom', () => {
+        const roomId = getPlayerRoom(socket);
+        if (!roomId) return;
+
+        const room = getRoomInfo(roomId);
+        if (!room) return;
+
+        // 从房间中移除玩家
+        room.players = room.players.filter(id => id !== socket.id);
+        socket.leave(roomId);
+
+        // 如果房间空了，删除房间
+        if (room.players.length === 0) {
+            rooms.delete(roomId);
+        } else {
+            // 如果是当前玩家的回合，转移到房间中的下一个玩家
+            if (room.currentTurn === socket.id) {
+                room.currentTurn = room.players[0];
+            }
+            // 通知房间内其他玩家
+            io.to(roomId).emit('playerLeft');
         }
-        io.emit('playerCount', playerCount);
-        if (players.length > 0) {
-            io.emit('turnUpdate', {
-                board: gameBoard,
-                currentTurn: currentTurn
-            });
+    });
+
+    socket.on('disconnect', () => {
+        console.log('玩家断开连接:', socket.id);
+        
+        // 如果玩家正在等待匹配，从等待列表中移除
+        if (matchingPlayers.has(socket.id)) {
+            matchingPlayers.delete(socket.id);
+        }
+        
+        // 查找玩家所在的房间
+        const roomId = getPlayerRoom(socket);
+        if (roomId) {
+            const room = getRoomInfo(roomId);
+            if (room) {
+                // 从房间中移除玩家
+                room.players = room.players.filter(id => id !== socket.id);
+                
+                // 如果房间空了，删除房间
+                if (room.players.length === 0) {
+                    rooms.delete(roomId);
+                } else {
+                    // 如果是当前玩家的回合，转移到房间中的下一个玩家
+                    if (room.currentTurn === socket.id) {
+                        room.currentTurn = room.players[0];
+                    }
+                    // 通知房间内其他玩家
+                    io.to(roomId).emit('playerLeft');
+                }
+            }
         }
     });
 });

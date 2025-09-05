@@ -271,6 +271,77 @@
             box-shadow: 0 2px 4px rgba(239, 68, 68, 0.3);
         }
 
+        .matching-screen {
+            max-width: 400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .matching-options {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .match-button {
+            padding: 15px 30px;
+            font-size: 1.2em;
+            font-family: 'Cinzel', serif;
+            background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            width: 100%;
+        }
+
+        .match-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(124, 58, 237, 0.3);
+        }
+
+        .match-button:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 4px rgba(124, 58, 237, 0.3);
+        }
+
+        .match-button.secondary {
+            background: linear-gradient(135deg, #64748b 0%, #475569 100%);
+        }
+
+        .room-input {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .room-input input {
+            padding: 12px;
+            font-size: 1.1em;
+            border: 2px solid #7c3aed;
+            border-radius: 8px;
+            outline: none;
+            transition: border-color 0.3s ease;
+        }
+
+        .room-input input:focus {
+            border-color: #6d28d9;
+        }
+
+        .matching-status {
+            margin-top: 20px;
+            padding: 15px;
+            text-align: center;
+            font-size: 1.1em;
+            color: #4a5568;
+            border-radius: 8px;
+            background-color: rgba(124, 58, 237, 0.1);
+        }
+
         @media (max-width: 600px) {
             h1 {
                 font-size: 1.8em;
@@ -301,16 +372,36 @@
 <body>
     <div class="container">
         <h1>混沌棋</h1>
-        <div class="game-controls">
-            <div class="coin">
-                <div class="coin-inner coin-front"></div>
-                <div class="coin-inner coin-back"></div>
+        
+        <!-- 匹配界面 -->
+        <div id="matchingScreen" class="matching-screen">
+            <div class="matching-options">
+                <button id="randomMatchBtn" class="match-button">随机匹配</button>
+                <button id="createRoomBtn" class="match-button">创建房间</button>
+                <button id="joinRoomBtn" class="match-button">加入房间</button>
             </div>
+            <div id="roomInput" class="room-input" style="display: none;">
+                <input type="text" id="roomIdInput" placeholder="请输入房间号" maxlength="6">
+                <button id="roomActionBtn" class="match-button">确认</button>
+                <button id="backToMatchingBtn" class="match-button secondary">返回</button>
+            </div>
+            <div id="matchingStatus" class="matching-status"></div>
         </div>
-        <canvas id="gameBoard" width="600" height="600"></canvas>
-        <div class="button-container">
-            <button id="endTurnBtn" class="end-turn-button">回合结束</button>
-            <button id="resetGameBtn" class="reset-button">结束游戏</button>
+
+        <!-- 游戏界面 -->
+        <div id="gameScreen" class="game-screen" style="display: none;">
+            <div class="game-controls">
+                <div class="coin">
+                    <div class="coin-inner coin-front"></div>
+                    <div class="coin-inner coin-back"></div>
+                </div>
+            </div>
+            <canvas id="gameBoard" width="600" height="600"></canvas>
+            <div class="button-container">
+                <button id="endTurnBtn" class="end-turn-button">回合结束</button>
+                <button id="resetGameBtn" class="reset-button">结束游戏</button>
+                <button id="leaveGameBtn" class="reset-button">退出房间</button>
+            </div>
         </div>
     </div>
 

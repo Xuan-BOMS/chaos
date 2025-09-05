@@ -1,0 +1,242 @@
+// 建立 Socket.io 连接
+const socket = io();
+
+// 游戏配置
+const GRID_SIZE = 5;
+const CELL_PADDING = 0.15; // 增加格子内边距，让棋子更小巧
+let board = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null));
+let hoveredCell = null;
+let isFlipping = false; // 硬币是否正在翻转
+let isMyTurn = false; // 是否是当前玩家的回合
+let currentRoom = null; // 当前房间ID
+let playerCount = 0; // 当前房间的玩家数量
+
+// 界面元素
+const matchingScreen = document.getElementById('matchingScreen');
+const gameScreen = document.getElementById('gameScreen');
+const matchingStatus = document.getElementById('matchingStatus');
+const roomInput = document.getElementById('roomInput');
+const roomIdInput = document.getElementById('roomIdInput');
+const roomActionBtn = document.getElementById('roomActionBtn');
+const canvas = document.getElementById('gameBoard');
+const ctx = canvas.getContext('2d');
+
+// UI 辅助函数
+function showMatchingScreen() {
+    matchingScreen.style.display = 'block';
+    gameScreen.style.display = 'none';
+    currentRoom = null;
+    playerCount = 1;
+    board = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null));
+    matchingStatus.textContent = '';
+    hideRoomInput();
+}
+
+function showGameScreen() {
+    matchingScreen.style.display = 'none';
+    gameScreen.style.display = 'block';
+    setTimeout(resizeCanvas, 0);
+}
+
+function showRoomInput(action) {
+    roomInput.style.display = 'flex';
+    roomActionBtn.textContent = action === 'create' ? '创建房间' : '加入房间';
+    roomActionBtn.dataset.action = action;
+    roomIdInput.value = '';
+    roomIdInput.placeholder = action === 'create' ? '请输入要创建的房间号' : '请输入要加入的房间号';
+}
+
+function hideRoomInput() {
+    roomInput.style.display = 'none';
+}
+
+// 初始化匹配系统
+function initMatchingSystem() {
+    // 随机匹配按钮
+    const randomMatchBtn = document.getElementById('randomMatchBtn');
+    if (randomMatchBtn) {
+        randomMatchBtn.addEventListener('click', () => {
+            matchingStatus.textContent = '正在寻找对手...';
+            socket.emit('randomMatch');
+            hideRoomInput();
+        });
+    }
+
+    // 创建房间按钮
+    const createRoomBtn = document.getElementById('createRoomBtn');
+    if (createRoomBtn) {
+        createRoomBtn.addEventListener('click', () => {
+            showRoomInput('create');
+        });
+    }
+
+    // 加入房间按钮
+    const joinRoomBtn = document.getElementById('joinRoomBtn');
+    if (joinRoomBtn) {
+        joinRoomBtn.addEventListener('click', () => {
+            showRoomInput('join');
+        });
+    }
+
+    // 返回按钮
+    const backBtn = document.getElementById('backToMatchingBtn');
+    if (backBtn) {
+        backBtn.addEventListener('click', () => {
+            hideRoomInput();
+        });
+    }
+
+    // 房间操作按钮
+    if (roomActionBtn) {
+        roomActionBtn.addEventListener('click', () => {
+            const roomId = roomIdInput.value.trim();
+            if (!roomId) {
+                alert('请输入房间号');
+                return;
+            }
+            
+            const action = roomActionBtn.dataset.action;
+            if (action === 'create') {
+                socket.emit('createRoom', roomId);
+            } else {
+                socket.emit('joinRoom', roomId);
+            }
+        });
+    }
+}
+
+// 更新回合按钮状态
+function updateTurnButton() {
+    const endTurnBtn = document.getElementById('endTurnBtn');
+    if (!endTurnBtn) return;
+
+    console.log('更新按钮状态:', { 
+        playerCount, 
+        isMyTurn, 
+        currentRoom,
+        socketId: socket.id 
+    });
+    
+    if (playerCount >= 2) {
+        if (isMyTurn) {
+            endTurnBtn.textContent = '回合结束';
+            endTurnBtn.disabled = false;
+            endTurnBtn.classList.remove('disabled');
+        } else {
+            endTurnBtn.textContent = '对方回合';
+            endTurnBtn.disabled = true;
+            endTurnBtn.classList.add('disabled');
+        }
+    } else {
+        endTurnBtn.textContent = '等待其他玩家...';
+        endTurnBtn.disabled = true;
+        endTurnBtn.classList.add('disabled');
+    }
+}
+
+// 初始化游戏控制
+function initGameControls() {
+    const endTurnBtn = document.getElementById('endTurnBtn');
+    if (endTurnBtn) {
+        endTurnBtn.addEventListener('click', () => {
+            if (isMyTurn) {
+                console.log('发送回合结束');
+                socket.emit('endTurn', board);
+                isMyTurn = false;
+                updateTurnButton();
+                drawBoard();
+            }
+        });
+    }
+}
+
+// Socket.io 事件处理
+socket.on('matchingStatus', (status) => {
+    matchingStatus.textContent = status;
+});
+
+socket.on('roomError', (error) => {
+    alert(error);
+});
+
+socket.on('roomCreated', (roomId) => {
+    currentRoom = roomId;
+    playerCount = 1;
+    matchingStatus.textContent = '等待其他玩家加入...';
+    hideRoomInput();
+});
+
+socket.on('matchSuccess', ({ roomId, isFirstPlayer }) => {
+    currentRoom = roomId;
+    isMyTurn = isFirstPlayer;
+    playerCount = 2;
+    showGameScreen();
+    updateTurnButton();
+});
+
+socket.on('gameStart', ({ board: newBoard, currentTurn }) => {
+    console.log('游戏开始:', { currentTurn, myId: socket.id });
+    board = JSON.parse(JSON.stringify(newBoard));
+    isMyTurn = (currentTurn === socket.id);
+    playerCount = 2;
+    showGameScreen();
+    setTimeout(() => {
+        resizeCanvas();
+        updateTurnButton();
+    }, 100);
+});
+
+socket.on('updateGame', ({ board: newBoard, currentTurn }) => {
+    board = JSON.parse(JSON.stringify(newBoard));
+    isMyTurn = (currentTurn === socket.id);
+    updateTurnButton();
+    drawBoard();
+});
+
+socket.on('playerLeft', () => {
+    alert('对方已离开游戏');
+    playerCount = 1;
+    showMatchingScreen();
+});
+
+socket.on('initPlayer', ({ isFirstPlayer }) => {
+    isMyTurn = isFirstPlayer;
+    updateTurnButton();
+});
+
+// 调整画布大小
+function resizeCanvas() {
+    if (!canvas || !canvas.parentElement) {
+        console.error('Canvas或其父元素不存在');
+        return;
+    }
+
+    console.log('调整画布大小');
+    const containerWidth = canvas.parentElement.clientWidth;
+    const size = Math.min(containerWidth - 40, 600);
+    
+    canvas.style.width = `${size}px`;
+    canvas.style.height = `${size}px`;
+    canvas.width = size * window.devicePixelRatio;
+    canvas.height = size * window.devicePixelRatio;
+    
+    ctx.setTransform(1, 0, 0, 1, 0, 0); // 重置变换
+    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    
+    requestAnimationFrame(() => {
+        drawBoard();
+        console.log('画布重绘完成');
+    });
+}
+
+// 等待 DOM 加载完成后初始化
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('DOM加载完成，开始初始化...');
+    try {
+        initMatchingSystem();
+        initGameControls();
+        console.log('初始化完成');
+    } catch (error) {
+        console.error('初始化出错:', error);
+    }
+});
