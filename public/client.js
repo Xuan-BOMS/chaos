@@ -139,9 +139,12 @@ function setupButtons() {
     if (endTurnBtn) {
         endTurnBtn.addEventListener('click', () => {
             if (isMyTurn) {
-                socket.emit('endTurn', board);
+                // 在回合结束时发送完整的棋盘状态
+                console.log('发送回合结束，当前棋盘状态:', board);
+                socket.emit('endTurn', JSON.stringify(board));
                 isMyTurn = false;
                 updateTurnButton();
+                drawBoard(); // 确保最后一次绘制
             }
         });
     }
@@ -345,12 +348,8 @@ function placePiece(color) {
 
     const piece = { color, scale: 0 };
     board[selectedCell.row][selectedCell.col] = piece;
-    socket.emit('placePiece', {
-        row: selectedCell.row,
-        col: selectedCell.col,
-        color: color
-    });
-
+    
+    // 不再即时同步，改为在回合结束时同步
     function animate() {
         if (piece.scale >= 1) {
             piece.scale = 1;
@@ -369,11 +368,7 @@ function removePiece() {
     if (!selectedCell || !board) return;
 
     board[selectedCell.row][selectedCell.col] = null;
-    socket.emit('placePiece', {
-        row: selectedCell.row,
-        col: selectedCell.col,
-        color: null
-    });
+    // 不再即时同步，改为在回合结束时同步
     drawBoard();
 }
 
@@ -514,9 +509,10 @@ function drawBoard() {
                 );
 
                 // 创建渐变效果
-                const color = COLORS[piece.color];
-                if (color) {
-                    const gradient = ctx.createRadialGradient(
+                const colorValue = COLORS[piece.color];
+                if (colorValue) {
+                    // 主要颜色渐变
+                    const baseGradient = ctx.createRadialGradient(
                         x + cellSize/2 - pieceSize/4,
                         y + cellSize/2 - pieceSize/4,
                         0,
@@ -524,14 +520,19 @@ function drawBoard() {
                         y + cellSize/2,
                         pieceSize/2
                     );
-                    gradient.addColorStop(0, color);
-                    gradient.addColorStop(1, adjustColor(color, -20));
-                    ctx.fillStyle = gradient;
+                    
+                    // 调整颜色亮度
+                    const lighterColor = adjustColor(colorValue, 30);
+                    baseGradient.addColorStop(0, lighterColor);
+                    baseGradient.addColorStop(0.6, colorValue);
+                    baseGradient.addColorStop(1, adjustColor(colorValue, -30));
+                    
+                    ctx.fillStyle = baseGradient;
                     ctx.fill();
 
                     // 绘制边框
-                    ctx.strokeStyle = adjustColor(color, -40);
-                    ctx.lineWidth = 1.5;
+                    ctx.strokeStyle = adjustColor(colorValue, -40);
+                    ctx.lineWidth = 2;
                     ctx.stroke();
 
                     // 添加高光效果
@@ -543,8 +544,8 @@ function drawBoard() {
                         y + cellSize/2,
                         pieceSize/2
                     );
-                    highlightGradient.addColorStop(0, 'rgba(255, 255, 255, 0.6)');
-                    highlightGradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.1)');
+                    highlightGradient.addColorStop(0, 'rgba(255, 255, 255, 0.7)');
+                    highlightGradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.2)');
                     highlightGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
                     ctx.fillStyle = highlightGradient;
                     ctx.fill();
@@ -604,10 +605,16 @@ socket.on('gameStart', ({ board: newBoard, currentTurn }) => {
 });
 
 socket.on('updateGame', ({ board: newBoard, currentTurn }) => {
-    board = JSON.parse(JSON.stringify(newBoard));
-    isMyTurn = (currentTurn === socket.id);
-    updateTurnButton();
-    drawBoard();
+    try {
+        // 处理字符串或对象格式的棋盘数据
+        const parsedBoard = typeof newBoard === 'string' ? JSON.parse(newBoard) : newBoard;
+        board = JSON.parse(JSON.stringify(parsedBoard));
+        isMyTurn = (currentTurn === socket.id);
+        updateTurnButton();
+        drawBoard();
+    } catch (error) {
+        console.error('处理游戏更新时出错:', error);
+    }
 });
 
 socket.on('playerLeft', () => {
