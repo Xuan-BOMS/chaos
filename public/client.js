@@ -154,6 +154,7 @@ function setupButtons() {
         resetGameBtn.addEventListener('click', () => {
             if (confirm('确定要重置游戏吗？')) {
                 socket.emit('resetGame');
+                resetGameState();
                 showMatchingScreen();
             }
         });
@@ -164,6 +165,7 @@ function setupButtons() {
         leaveGameBtn.addEventListener('click', () => {
             if (confirm('确定要离开房间吗？')) {
                 socket.emit('leaveRoom');
+                resetGameState();
                 showMatchingScreen();
             }
         });
@@ -310,13 +312,25 @@ function hideRoomInput() {
 function showMatchingScreen() {
     if (!matchingScreen || !gameScreen) return;
     
+    // 重置游戏状态
+    resetGameState();
+    
+    // 更新界面显示
     matchingScreen.style.display = 'block';
     gameScreen.style.display = 'none';
-    currentRoom = null;
-    playerCount = 1;
-    board = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null));
     matchingStatus.textContent = '';
     hideRoomInput();
+}
+
+// 重置游戏状态
+function resetGameState() {
+    currentRoom = null;
+    playerCount = 1;
+    isMyTurn = false;
+    hoveredCell = null;
+    selectedCell = null;
+    board = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null));
+    console.log('游戏状态已重置');
 }
 
 // 显示游戏界面
@@ -593,25 +607,35 @@ socket.on('matchSuccess', ({ roomId, isFirstPlayer }) => {
     updateTurnButton();
 });
 
-socket.on('gameStart', ({ board: newBoard, currentTurn }) => {
-    board = JSON.parse(JSON.stringify(newBoard));
+socket.on('gameStart', ({ board: newBoard, currentTurn, playerCount: newPlayerCount }) => {
+    console.log('游戏开始:', { currentTurn, myId: socket.id });
+    board = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null));
+    if (newBoard) {
+        board = JSON.parse(JSON.stringify(newBoard));
+    }
     isMyTurn = (currentTurn === socket.id);
-    playerCount = 2;
+    playerCount = newPlayerCount || 2;
     showGameScreen();
     setTimeout(() => {
         resizeCanvas();
+        updatePlayerCount();
         updateTurnButton();
     }, 100);
 });
 
-socket.on('updateGame', ({ board: newBoard, currentTurn }) => {
+socket.on('updateGame', ({ board: newBoard, currentTurn, playerCount: newPlayerCount }) => {
     try {
         // 处理字符串或对象格式的棋盘数据
         const parsedBoard = typeof newBoard === 'string' ? JSON.parse(newBoard) : newBoard;
         board = JSON.parse(JSON.stringify(parsedBoard));
         isMyTurn = (currentTurn === socket.id);
+        if (newPlayerCount) {
+            playerCount = newPlayerCount;
+        }
+        updatePlayerCount();
         updateTurnButton();
         drawBoard();
+        console.log('游戏更新:', { isMyTurn, playerCount });
     } catch (error) {
         console.error('处理游戏更新时出错:', error);
     }
@@ -619,11 +643,12 @@ socket.on('updateGame', ({ board: newBoard, currentTurn }) => {
 
 socket.on('playerLeft', () => {
     alert('对方已离开游戏');
-    playerCount = 1;
+    resetGameState();
     showMatchingScreen();
 });
 
 socket.on('gameReset', () => {
+    resetGameState();
     showMatchingScreen();
     alert('游戏已被重置');
 });

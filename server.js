@@ -99,7 +99,7 @@ io.on('connection', (socket) => {
         io.to(room.players[1]).emit('initPlayer', { isFirstPlayer: false });
     });
 
-    socket.on('endTurn', (board) => {
+    socket.on('endTurn', (boardData) => {
         const roomId = getPlayerRoom(socket);
         if (!roomId) return;
         
@@ -107,28 +107,42 @@ io.on('connection', (socket) => {
         if (!room) return;
         
         if (socket.id === room.currentTurn) {
-            room.gameBoard = board;
-            // 找到下一个玩家
-            const currentIndex = room.players.indexOf(socket.id);
-            const nextIndex = (currentIndex + 1) % room.players.length;
-            room.currentTurn = room.players[nextIndex];
-            
-            // 广播更新后的游戏状态给房间内所有玩家
-            io.to(roomId).emit('updateGame', {
-                board: room.gameBoard,
-                currentTurn: room.currentTurn,
-                playerCount: room.players.length
-            });
+            try {
+                // 解析接收到的棋盘数据
+                const newBoard = typeof boardData === 'string' ? JSON.parse(boardData) : boardData;
+                room.board = newBoard; // 更新房间的棋盘状态
+                
+                // 找到下一个玩家
+                const currentIndex = room.players.indexOf(socket.id);
+                const nextIndex = (currentIndex + 1) % room.players.length;
+                room.currentTurn = room.players[nextIndex];
+                
+                // 广播更新后的游戏状态给房间内所有玩家
+                io.to(roomId).emit('updateGame', {
+                    board: room.board,
+                    currentTurn: room.currentTurn,
+                    playerCount: room.players.length
+                });
+            } catch (error) {
+                console.error('处理回合结束时出错:', error);
+            }
         }
     });
 
     // 检查并更新回合状态
     socket.on('checkTurn', () => {
-        if (players.length === 2 && !currentTurn) {
-            currentTurn = players[0]; // 设置第一个玩家为当前回合
-            io.emit('turnUpdate', {
-                board: gameBoard,
-                currentTurn: currentTurn
+        const roomId = getPlayerRoom(socket);
+        if (!roomId) return;
+        
+        const room = getRoomInfo(roomId);
+        if (!room) return;
+        
+        if (room.players.length === 2 && !room.currentTurn) {
+            room.currentTurn = room.players[0]; // 设置第一个玩家为当前回合
+            io.to(roomId).emit('updateGame', {
+                board: room.board,
+                currentTurn: room.currentTurn,
+                playerCount: room.players.length
             });
         }
     });
@@ -152,23 +166,13 @@ io.on('connection', (socket) => {
         });
     });
 
-    // 处理落子
+    // 处理落子（现在仅在回合结束时更新）
     socket.on('placePiece', ({ row, col, color }) => {
         const roomId = getPlayerRoom(socket);
         if (!roomId) return;
         
         const room = getRoomInfo(roomId);
         if (!room || socket.id !== room.currentTurn) return;
-        
-        // 更新棋盘状态（允许更改或删除已有棋子）
-        room.board[row][col] = color;
-            
-        // 广播更新后的游戏状态
-        io.to(roomId).emit('updateGame', {
-            board: room.board,
-            currentTurn: room.currentTurn,
-            playerCount: room.players.length
-        });
     });
 
     // 处理玩家离开房间
@@ -187,17 +191,61 @@ io.on('connection', (socket) => {
         if (room.players.length === 0) {
             rooms.delete(roomId);
         } else {
-            // 如果是当前玩家的回合，转移到房间中的下一个玩家
-            if (room.currentTurn === socket.id) {
-                room.currentTurn = room.players[0];
-            }
+            // 重置房间状态
+            room.board = Array(5).fill(null).map(() => Array(5).fill(null));
+            room.currentTurn = room.players[0];
+            
             // 通知房间内其他玩家
             io.to(roomId).emit('playerLeft');
+            
+            // 向剩余玩家发送重置后的游戏状态
+            io.to(roomId).emit('updateGame', {
+                board: room.board,
+                currentTurn: room.currentTurn,
+                playerCount: room.players.length
+            });
         }
     });
 
     socket.on('disconnect', () => {
         console.log('玩家断开连接:', socket.id);
+        
+        // 从匹配队列中移除
+        matchingPlayers.delete(socket.id);
+        
+        // 获取玩家的所有房间
+        const playerRooms = Array.from(socket.rooms);
+        
+        // 处理玩家所在的游戏房间
+        for (const roomId of playerRooms) {
+            // 跳过socket自己的room
+            if (roomId === socket.id) continue;
+            
+            const room = getRoomInfo(roomId);
+            if (room) {
+                // 从房间中移除玩家
+                room.players = room.players.filter(id => id !== socket.id);
+                
+                if (room.players.length === 0) {
+                    // 如果房间空了，删除房间
+                    rooms.delete(roomId);
+                } else {
+                    // 重置房间状态
+                    room.board = Array(5).fill(null).map(() => Array(5).fill(null));
+                    room.currentTurn = room.players[0];
+                    
+                    // 通知房间内其他玩家
+                    io.to(roomId).emit('playerLeft');
+                    
+                    // 发送重置后的游戏状态
+                    io.to(roomId).emit('updateGame', {
+                        board: room.board,
+                        currentTurn: room.currentTurn,
+                        playerCount: room.players.length
+                    });
+                }
+            }
+        }
         
         // 如果玩家正在等待匹配，从等待列表中移除
         if (matchingPlayers.has(socket.id)) {
